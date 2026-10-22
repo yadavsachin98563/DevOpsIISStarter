@@ -1,8 +1,3 @@
-# Starter pipeline
-# Start with a minimal pipeline that you can customize to build and deploy your code.
-# Add steps that build, run tests, deploy, and more:
-# https://aka.ms/yaml
-
 
 trigger:
   branches:
@@ -16,32 +11,59 @@ pool:
 
 variables:
   buildConfiguration: 'Release'
-  projectFile: 'src/DevOpsIISStarter/DevOpsIISStarter.csproj'
 
 steps:
 - checkout: self
 
+# Step 1: Install/select .NET SDK
 - task: UseDotNet@2
   displayName: 'Use .NET 10 SDK'
   inputs:
     packageType: 'sdk'
     version: '10.0.x'
 
+# Step 2: Extract project ZIP from GitHub repository
+- task: ExtractFiles@1
+  displayName: 'Extract project ZIP'
+  inputs:
+    archiveFilePatterns: '$(Build.SourcesDirectory)/DevOpsIISStarter (4).zip'
+    destinationFolder: '$(Build.SourcesDirectory)/extracted'
+    cleanDestinationFolder: true
+    overwriteExistingFiles: true
+
+# Step 3: Find the .csproj file dynamically
 - task: PowerShell@2
-  displayName: 'Verify repository files'
+  displayName: 'Find project file'
   inputs:
     targetType: 'inline'
     script: |
-      Write-Host "Repository root: $(Build.SourcesDirectory)"
-      Get-ChildItem "$(Build.SourcesDirectory)" -Recurse -Filter *.csproj |
-        Select-Object -ExpandProperty FullName
+      $root = "$(Build.SourcesDirectory)\extracted"
+      Write-Host "Searching for project file under: $root"
 
+      $projects = @(Get-ChildItem $root -Recurse -Filter *.csproj -File)
+
+      if ($projects.Count -eq 0) {
+        throw "No .csproj file found. Verify the ZIP contents and extraction."
+      }
+
+      if ($projects.Count -gt 1) {
+        Write-Host "Multiple project files found:"
+        $projects | ForEach-Object { Write-Host $_.FullName }
+        throw "More than one .csproj found. Configure the required project explicitly."
+      }
+
+      $project = $projects[0].FullName
+      Write-Host "Project found: $project"
+      Write-Host "##vso[task.setvariable variable=projectFile]$project"
+
+# Step 4: Restore dependencies
 - task: DotNetCoreCLI@2
   displayName: 'Restore'
   inputs:
     command: 'restore'
     projects: '$(projectFile)'
 
+# Step 5: Build
 - task: DotNetCoreCLI@2
   displayName: 'Build'
   inputs:
@@ -49,17 +71,19 @@ steps:
     projects: '$(projectFile)'
     arguments: '--configuration $(buildConfiguration) --no-restore'
 
+# Step 6: Publish deployment files
 - task: DotNetCoreCLI@2
   displayName: 'Publish'
   inputs:
     command: 'publish'
     publishWebProjects: false
     projects: '$(projectFile)'
-    arguments: '--configuration $(buildConfiguration) --output $(Build.ArtifactStagingDirectory)/publish'
+    arguments: '--configuration $(buildConfiguration) --output "$(Build.ArtifactStagingDirectory)\publish"'
     zipAfterPublish: false
 
+# Step 7: Publish artifact for the CD stage
 - task: PublishPipelineArtifact@1
   displayName: 'Publish deployment artifact'
   inputs:
-    targetPath: '$(Build.ArtifactStagingDirectory)/publish'
+    targetPath: '$(Build.ArtifactStagingDirectory)\publish'
     artifact: 'iis-drop'
