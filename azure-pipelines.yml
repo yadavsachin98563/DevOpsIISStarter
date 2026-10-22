@@ -1,0 +1,65 @@
+# Starter pipeline
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
+
+
+trigger:
+  branches:
+    include:
+      - main
+
+pool:
+  name: Windows-IIS-Pool
+  demands:
+    - Agent.Name -equals Windows-IIS-Agent-01
+
+variables:
+  buildConfiguration: 'Release'
+  projectFile: 'src/DevOpsIISStarter/DevOpsIISStarter.csproj'
+
+steps:
+- checkout: self
+
+- task: UseDotNet@2
+  displayName: 'Use .NET 10 SDK'
+  inputs:
+    packageType: 'sdk'
+    version: '10.0.x'
+
+- task: PowerShell@2
+  displayName: 'Verify repository files'
+  inputs:
+    targetType: 'inline'
+    script: |
+      Write-Host "Repository root: $(Build.SourcesDirectory)"
+      Get-ChildItem "$(Build.SourcesDirectory)" -Recurse -Filter *.csproj |
+        Select-Object -ExpandProperty FullName
+
+- task: DotNetCoreCLI@2
+  displayName: 'Restore'
+  inputs:
+    command: 'restore'
+    projects: '$(projectFile)'
+
+- task: DotNetCoreCLI@2
+  displayName: 'Build'
+  inputs:
+    command: 'build'
+    projects: '$(projectFile)'
+    arguments: '--configuration $(buildConfiguration) --no-restore'
+
+- task: DotNetCoreCLI@2
+  displayName: 'Publish'
+  inputs:
+    command: 'publish'
+    publishWebProjects: false
+    projects: '$(projectFile)'
+    arguments: '--configuration $(buildConfiguration) --output $(Build.ArtifactStagingDirectory)/publish'
+    zipAfterPublish: false
+
+- task: PublishPipelineArtifact@1
+  displayName: 'Publish deployment artifact'
+  inputs:
+    targetPath: '$(Build.ArtifactStagingDirectory)/publish'
+    artifact: 'iis-drop'
