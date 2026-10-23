@@ -7,7 +7,7 @@ trigger:
 pool:
   name: Windows-IIS-Pool
   demands:
-    - Agent.Name -equals Windows-IIS-Agent-01
+    - Agent.Name -equals Windows-Build-Agent-01
 
 variables:
   buildConfiguration: 'Release'
