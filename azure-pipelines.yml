@@ -1,4 +1,4 @@
-```yaml
+
 trigger:
   branches:
     include:
@@ -14,11 +14,11 @@ variables:
   projectName: 'DevOpsIISStarter'
   extractedPath: '$(Build.SourcesDirectory)\extracted'
   publishPath: '$(Build.ArtifactStagingDirectory)\publish'
+  reportPath: '$(Build.ArtifactStagingDirectory)\owasp-report'
 
 steps:
 # Step 1: Checkout source code
 - checkout: self
-  displayName: 'Checkout Source Code'
 
 # Step 2: Install .NET SDK
 - task: UseDotNet@2
@@ -27,7 +27,7 @@ steps:
     packageType: 'sdk'
     version: '10.0.x'
 
-# Step 3: Extract the application ZIP
+# Step 3: Extract application ZIP
 - task: ExtractFiles@1
   displayName: 'Extract Project ZIP'
   inputs:
@@ -44,34 +44,29 @@ steps:
     script: |
       $root = "$(extractedPath)"
 
-      Write-Host "Searching for .csproj files in: $root"
+      if (-not (Test-Path $root)) {
+          throw "Extraction directory not found: $root"
+      }
 
       $projects = @(Get-ChildItem -Path $root -Recurse -Filter *.csproj -File)
 
-      if ($projects.Count -eq 0) {
-          throw "No .csproj file found in the extracted ZIP."
-      }
-
-      if ($projects.Count -gt 1) {
-          $projects | ForEach-Object {
-              Write-Host $_.FullName
-          }
-          throw "Multiple .csproj files found. Configure the required project explicitly."
+      if ($projects.Count -ne 1) {
+          $projects | ForEach-Object { Write-Host $_.FullName }
+          throw "Expected exactly one .csproj file, found $($projects.Count)."
       }
 
       $project = $projects[0].FullName
-
       Write-Host "Project found: $project"
       Write-Host "##vso[task.setvariable variable=projectFile]$project"
 
-# Step 5: Restore NuGet dependencies
+# Step 5: Restore dependencies
 - task: DotNetCoreCLI@2
   displayName: 'Restore Dependencies'
   inputs:
     command: 'restore'
     projects: '$(projectFile)'
 
-# Step 6: Build the application
+# Step 6: Build application
 - task: DotNetCoreCLI@2
   displayName: 'Build Application'
   inputs:
@@ -79,7 +74,15 @@ steps:
     projects: '$(projectFile)'
     arguments: '--configuration $(buildConfiguration) --no-restore'
 
-# Step 7: OWASP Dependency-Check
+# Step 7: Create OWASP report directory
+- task: PowerShell@2
+  displayName: 'Prepare OWASP Report Directory'
+  inputs:
+    targetType: 'inline'
+    script: |
+      New-Item -ItemType Directory -Path "$(reportPath)" -Force | Out-Null
+
+# Step 8: OWASP Dependency-Check
 - task: dependency-check-build-task@6
   displayName: 'OWASP Dependency-Check Scan'
   inputs:
@@ -87,11 +90,12 @@ steps:
     scanPath: '$(extractedPath)'
     format: 'HTML'
     uploadReports: true
+    reportsDirectory: '$(reportPath)'
     failOnCVSS: '7'
     warnOnCVSSViolation: false
     enableVerbose: true
 
-# Step 8: Publish application files
+# Step 9: Publish application
 - task: DotNetCoreCLI@2
   displayName: 'Publish Application'
   inputs:
@@ -101,10 +105,9 @@ steps:
     arguments: '--configuration $(buildConfiguration) --no-restore --output "$(publishPath)"'
     zipAfterPublish: false
 
-# Step 9: Publish deployment artifact
+# Step 10: Publish IIS deployment artifact
 - task: PublishPipelineArtifact@1
   displayName: 'Publish IIS Deployment Artifact'
   inputs:
     targetPath: '$(publishPath)'
     artifact: 'iis-drop'
-```
