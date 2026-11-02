@@ -1,4 +1,4 @@
-
+```yaml
 trigger:
   branches:
     include:
@@ -11,79 +11,100 @@ pool:
 
 variables:
   buildConfiguration: 'Release'
+  projectName: 'DevOpsIISStarter'
+  extractedPath: '$(Build.SourcesDirectory)\extracted'
+  publishPath: '$(Build.ArtifactStagingDirectory)\publish'
 
 steps:
+# Step 1: Checkout source code
 - checkout: self
+  displayName: 'Checkout Source Code'
 
-# Step 1: Install/select .NET SDK
+# Step 2: Install .NET SDK
 - task: UseDotNet@2
-  displayName: 'Use .NET 10 SDK'
+  displayName: 'Install .NET 10 SDK'
   inputs:
     packageType: 'sdk'
     version: '10.0.x'
 
-# Step 2: Extract project ZIP from GitHub repository
+# Step 3: Extract the application ZIP
 - task: ExtractFiles@1
-  displayName: 'Extract project ZIP'
+  displayName: 'Extract Project ZIP'
   inputs:
-    archiveFilePatterns: '$(Build.SourcesDirectory)/DevOpsIISStarter (4).zip'
-    destinationFolder: '$(Build.SourcesDirectory)/extracted'
+    archiveFilePatterns: '$(Build.SourcesDirectory)\DevOpsIISStarter (4).zip'
+    destinationFolder: '$(extractedPath)'
     cleanDestinationFolder: true
     overwriteExistingFiles: true
 
-# Step 3: Find the .csproj file dynamically
+# Step 4: Find the project file
 - task: PowerShell@2
-  displayName: 'Find project file'
+  displayName: 'Find .NET Project File'
   inputs:
     targetType: 'inline'
     script: |
-      $root = "$(Build.SourcesDirectory)\extracted"
-      Write-Host "Searching for project file under: $root"
+      $root = "$(extractedPath)"
 
-      $projects = @(Get-ChildItem $root -Recurse -Filter *.csproj -File)
+      Write-Host "Searching for .csproj files in: $root"
+
+      $projects = @(Get-ChildItem -Path $root -Recurse -Filter *.csproj -File)
 
       if ($projects.Count -eq 0) {
-        throw "No .csproj file found. Verify the ZIP contents and extraction."
+          throw "No .csproj file found in the extracted ZIP."
       }
 
       if ($projects.Count -gt 1) {
-        Write-Host "Multiple project files found:"
-        $projects | ForEach-Object { Write-Host $_.FullName }
-        throw "More than one .csproj found. Configure the required project explicitly."
+          $projects | ForEach-Object {
+              Write-Host $_.FullName
+          }
+          throw "Multiple .csproj files found. Configure the required project explicitly."
       }
 
       $project = $projects[0].FullName
+
       Write-Host "Project found: $project"
       Write-Host "##vso[task.setvariable variable=projectFile]$project"
 
-# Step 4: Restore dependencies
+# Step 5: Restore NuGet dependencies
 - task: DotNetCoreCLI@2
-  displayName: 'Restore'
+  displayName: 'Restore Dependencies'
   inputs:
     command: 'restore'
     projects: '$(projectFile)'
 
-# Step 5: Build
+# Step 6: Build the application
 - task: DotNetCoreCLI@2
-  displayName: 'Build'
+  displayName: 'Build Application'
   inputs:
     command: 'build'
     projects: '$(projectFile)'
     arguments: '--configuration $(buildConfiguration) --no-restore'
 
-# Step 6: Publish deployment files
+# Step 7: OWASP Dependency-Check
+- task: dependency-check-build-task@6
+  displayName: 'OWASP Dependency-Check Scan'
+  inputs:
+    projectName: '$(projectName)'
+    scanPath: '$(extractedPath)'
+    format: 'HTML'
+    uploadReports: true
+    failOnCVSS: '7'
+    warnOnCVSSViolation: false
+    enableVerbose: true
+
+# Step 8: Publish application files
 - task: DotNetCoreCLI@2
-  displayName: 'Publish'
+  displayName: 'Publish Application'
   inputs:
     command: 'publish'
     publishWebProjects: false
     projects: '$(projectFile)'
-    arguments: '--configuration $(buildConfiguration) --output "$(Build.ArtifactStagingDirectory)\publish"'
+    arguments: '--configuration $(buildConfiguration) --no-restore --output "$(publishPath)"'
     zipAfterPublish: false
 
-# Step 7: Publish artifact for the CD stage
+# Step 9: Publish deployment artifact
 - task: PublishPipelineArtifact@1
-  displayName: 'Publish deployment artifact'
+  displayName: 'Publish IIS Deployment Artifact'
   inputs:
-    targetPath: '$(Build.ArtifactStagingDirectory)\publish'
+    targetPath: '$(publishPath)'
     artifact: 'iis-drop'
+```
