@@ -1,89 +1,77 @@
-
 trigger:
-  branches:
-    include:
-      - main
+- main
 
 pool:
-  name: Windows-IIS-Pool
-  demands:
-    - Agent.Name -equals Windows-Build-Agent-01
+  vmImage: ubuntu-latest
 
 variables:
-  buildConfiguration: 'Release'
+  imageName: hello-api:latest
+  containerName: hello-api
+  reportDir: $(Build.ArtifactStagingDirectory)/zap-report
 
 steps:
 - checkout: self
 
-# Step 1: Install/select .NET SDK
-- task: UseDotNet@2
-  displayName: 'Use .NET 10 SDK'
+- task: Bash@3
+  displayName: 'Build Application Docker Image'
   inputs:
-    packageType: 'sdk'
-    version: '10.0.x'
-
-# Step 2: Extract project ZIP from GitHub repository
-- task: ExtractFiles@1
-  displayName: 'Extract project ZIP'
-  inputs:
-    archiveFilePatterns: '$(Build.SourcesDirectory)/DevOpsIISStarter (4).zip'
-    destinationFolder: '$(Build.SourcesDirectory)/extracted'
-    cleanDestinationFolder: true
-    overwriteExistingFiles: true
-
-# Step 3: Find the .csproj file dynamically
-- task: PowerShell@2
-  displayName: 'Find project file'
-  inputs:
-    targetType: 'inline'
+    targetType: inline
     script: |
-      $root = "$(Build.SourcesDirectory)\extracted"
-      Write-Host "Searching for project file under: $root"
+      set -e
+      docker build -t $(imageName) .
 
-      $projects = @(Get-ChildItem $root -Recurse -Filter *.csproj -File)
-
-      if ($projects.Count -eq 0) {
-        throw "No .csproj file found. Verify the ZIP contents and extraction."
-      }
-
-      if ($projects.Count -gt 1) {
-        Write-Host "Multiple project files found:"
-        $projects | ForEach-Object { Write-Host $_.FullName }
-        throw "More than one .csproj found. Configure the required project explicitly."
-      }
-
-      $project = $projects[0].FullName
-      Write-Host "Project found: $project"
-      Write-Host "##vso[task.setvariable variable=projectFile]$project"
-
-# Step 4: Restore dependencies
-- task: DotNetCoreCLI@2
-  displayName: 'Restore'
+- task: Bash@3
+  displayName: 'Start Hello API Container'
   inputs:
-    command: 'restore'
-    projects: '$(projectFile)'
+    targetType: inline
+    script: |
+      set -e
+      docker run -d 
+        --name $(containerName) 
+        -p 5000:5000 
+        $(imageName)
 
-# Step 5: Build
-- task: DotNetCoreCLI@2
-  displayName: 'Build'
+      for i in {1..30}; do
+        if curl -fsS http://127.0.0.1:5000/; then
+          echo "Application is responding."
+          exit 0
+        fi
+        sleep 2
+      done
+
+      echo "Application did not become ready."
+      docker logs $(containerName)
+      exit 1
+
+- task: Bash@3
+  displayName: 'Run OWASP ZAP Baseline Scan'
   inputs:
-    command: 'build'
-    projects: '$(projectFile)'
-    arguments: '--configuration $(buildConfiguration) --no-restore'
+    targetType: inline
+    script: |
+      mkdir -p "$(reportDir)"
 
-# Step 6: Publish deployment files
-- task: DotNetCoreCLI@2
-  displayName: 'Publish'
-  inputs:
-    command: 'publish'
-    publishWebProjects: false
-    projects: '$(projectFile)'
-    arguments: '--configuration $(buildConfiguration) --output "$(Build.ArtifactStagingDirectory)\publish"'
-    zipAfterPublish: false
+      docker run --rm \
+        --network host \
+        -v "$(reportDir):/zap/wrk/:rw" \
+        ghcr.io/zaproxy/zaproxy:stable \
+        zap-baseline.py \
+        -t http://127.0.0.1:5000 \
+        -r zap-report.html \
+        -J zap-report.json
+  continueOnError: true
 
-# Step 7: Publish artifact for the CD stage
 - task: PublishPipelineArtifact@1
-  displayName: 'Publish deployment artifact'
+  displayName: 'Publish OWASP ZAP Reports'
+  condition: always()
   inputs:
-    targetPath: '$(Build.ArtifactStagingDirectory)\publish'
-    artifact: 'iis-drop'
+    targetPath: '$(reportDir)'
+    artifact: 'OWASP-ZAP-Report'
+    publishLocation: pipeline
+
+- task: Bash@3
+  displayName: 'Cleanup Application Container'
+  condition: always()
+  inputs:
+    targetType: inline
+    script: |
+      docker rm -f $(containerName) || true
